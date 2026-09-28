@@ -105,10 +105,74 @@ describe("GoogleEmbedder (unit)", () => {
       const callArgs = mockEmbedContent.mock.calls[0][0];
       expect(callArgs).toEqual({
         model: "gemini-embedding-001",
-        contents: ["hello", "world"],
+        contents: [
+          { parts: [{ text: "hello" }] },
+          { parts: [{ text: "world" }] },
+        ],
         config: { outputDimensionality: 512 },
       });
     });
+  });
+
+  describe("batch input and response validation", () => {
+    it.each(["gemini-embedding-2", "models/gemini-embedding-2-preview"])(
+      "keeps independent embeddings with %s",
+      async (model) => {
+        const vectors = [
+          [0.1, 0.2],
+          [0.3, 0.4],
+        ];
+        mockEmbedContent.mockImplementation(async ({ contents }) => ({
+          // Gemini Embedding 2 treats a string array as one multipart input.
+          embeddings: (typeof contents[0] === "string"
+            ? [[0.5, 0.6]]
+            : vectors
+          ).map((values) => ({ values })),
+        }));
+        const embedder = new GoogleEmbedder({ apiKey: "test-key", model });
+
+        await expect(embedder.embedBatch(["hello", "world"])).resolves.toEqual(
+          vectors,
+        );
+      },
+    );
+
+    it("returns an empty batch without calling the API", async () => {
+      const embedder = new GoogleEmbedder({ apiKey: "test-key" });
+      await expect(embedder.embedBatch([])).resolves.toEqual([]);
+      expect(mockEmbedContent).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["missing embeddings", {}],
+      ["too few embeddings", { embeddings: [{ values: mockEmbedding }] }],
+      [
+        "too many embeddings",
+        { embeddings: Array(3).fill({ values: mockEmbedding }) },
+      ],
+    ])(
+      "rejects %s instead of returning a partial batch",
+      async (_, response) => {
+        mockEmbedContent.mockResolvedValue(response);
+        const embedder = new GoogleEmbedder({ apiKey: "test-key" });
+        await expect(embedder.embedBatch(["hello", "world"])).rejects.toThrow(
+          /Google embedBatch\(\) returned .* embeddings for 2 texts/,
+        );
+      },
+    );
+
+    it.each([undefined, []])(
+      "rejects an invalid vector: %p",
+      async (values) => {
+        mockEmbedContent.mockResolvedValue({
+          embeddings: [{ values: mockEmbedding }, { values }],
+        });
+        const embedder = new GoogleEmbedder({ apiKey: "test-key" });
+        await expect(embedder.embedBatch(["hello", "world"])).rejects.toThrow(
+          "Google embedBatch() returned an empty embedding at index 1",
+        );
+      },
+    );
   });
 
   describe("basic functionality", () => {

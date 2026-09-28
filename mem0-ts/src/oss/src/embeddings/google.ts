@@ -38,14 +38,29 @@ export class GoogleEmbedder implements Embedder {
   }
 
   async embedBatch(texts: string[]): Promise<number[][]> {
+    if (texts.length === 0) return [];
     await this.ensureClient();
     const response = await this.google.models.embedContent({
       model: this.model,
-      contents: texts,
+      // Keep each text separate: Gemini Embedding 2 combines string arrays.
+      contents: texts.map((text) => ({ parts: [{ text }] })),
       ...(this.embeddingDims !== undefined && {
         config: { outputDimensionality: this.embeddingDims },
       }),
     });
-    return response.embeddings!.map((item) => item.values!);
+    const embeddings = response.embeddings ?? [];
+    if (embeddings.length !== texts.length) {
+      throw new Error(
+        `Google embedBatch() returned ${embeddings.length} embeddings for ${texts.length} texts using model '${this.model}'`,
+      );
+    }
+    return embeddings.map((item, index) => {
+      if (!item.values?.length) {
+        throw new Error(
+          `Google embedBatch() returned an empty embedding at index ${index} using model '${this.model}'`,
+        );
+      }
+      return item.values;
+    });
   }
 }
